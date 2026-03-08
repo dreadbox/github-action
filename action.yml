@@ -1,0 +1,52 @@
+name: Dreadbox Nix CI
+description: >
+  Sets up GitHub App auth, Nix, FlakeHub cache, builds all flake outputs,
+  and publishes a rolling release to FlakeHub on pushes to main.
+
+inputs:
+  app-id:
+    description: GitHub App ID (pass secrets.APP_ID)
+    required: true
+  app-private-key:
+    description: GitHub App private key (pass secrets.APP_PRIVATE_KEY)
+    required: true
+  flakehub-name:
+    description: FlakeHub flake name, e.g. dreadbox/nix
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/create-github-app-token@v1
+      id: app-token
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: dreadbox
+
+    - name: Configure git to use app token
+      shell: bash
+      run: |
+        git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+    - uses: DeterminateSystems/determinate-nix-action@v3
+      with:
+        github-token: ${{ steps.app-token.outputs.token }}
+
+    - uses: DeterminateSystems/flakehub-cache-action@v2
+
+    - name: Run flake check
+      shell: bash
+      run: nix flake check --show-trace
+
+    - name: Build all flake outputs
+      shell: bash
+      run: nix run https://flakehub.com/f/DeterminateSystems/flake-iter/* -- build --verbose
+
+    - uses: DeterminateSystems/flakehub-push@v6
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      with:
+        visibility: private
+        name: ${{ inputs.flakehub-name }}
+        rolling: true
+        include-output-paths: true
