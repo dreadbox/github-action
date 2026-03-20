@@ -1,0 +1,44 @@
+name: Dreadbox Nix Setup
+description: >
+  Sets up GitHub App auth, Nix, and FlakeHub cache.
+  Use this as a setup step in any job that needs Nix with
+  private dreadbox flake access.
+
+inputs:
+  app-id:
+    description: GitHub App ID (pass secrets.APP_ID)
+    required: true
+  app-private-key:
+    description: GitHub App private key (pass secrets.APP_PRIVATE_KEY)
+    required: true
+  extra-nix-conf:
+    description: Extra Nix configuration lines passed to Determinate Nix
+    required: false
+    default: ""
+
+outputs:
+  token:
+    description: The generated GitHub App token
+    value: ${{ steps.app-token.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/create-github-app-token@v1
+      id: app-token
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: dreadbox
+
+    - name: Configure git to use app token
+      shell: bash
+      run: |
+        git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+    - uses: DeterminateSystems/determinate-nix-action@v3
+      with:
+        github-token: ${{ steps.app-token.outputs.token }}
+        extra-conf: ${{ inputs.extra-nix-conf }}
+
+    - uses: DeterminateSystems/flakehub-cache-action@main

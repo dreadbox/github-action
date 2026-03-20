@@ -87,23 +87,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/create-github-app-token@v1
-        id: app-token
+      - uses: dreadbox/github-action@v1
         with:
           app-id: ${{ secrets.app-id }}
-          private-key: ${{ secrets.app-private-key }}
-          owner: dreadbox
-
-      - name: Configure git to use app token
-        shell: bash
-        run: |
-          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
-
-      - uses: DeterminateSystems/determinate-nix-action@v3
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-
-      - uses: DeterminateSystems/flakehub-cache-action@main
+          app-private-key: ${{ secrets.app-private-key }}
 
       - uses: DeterminateSystems/flake-checker-action@main
 
@@ -131,25 +118,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/create-github-app-token@v1
-        id: app-token
+      - uses: dreadbox/github-action@v1
         with:
           app-id: ${{ secrets.app-id }}
-          private-key: ${{ secrets.app-private-key }}
-          owner: dreadbox
-
-      - name: Configure git to use app token
-        shell: bash
-        run: |
-          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
-
-      - uses: DeterminateSystems/determinate-nix-action@v3
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          extra-conf: |
-            ${{ inputs.extra-nix-conf }}
-
-      - uses: DeterminateSystems/flakehub-cache-action@main
+          app-private-key: ${{ secrets.app-private-key }}
+          extra-nix-conf: ${{ inputs.extra-nix-conf }}
 
       - name: Run flake check
         working-directory: ${{ inputs.directory }}
@@ -194,21 +167,11 @@ jobs:
       - uses: actions/checkout@v4
         if: ${{ github.ref == format('refs/heads/{0}', inputs.default-branch) || startsWith(github.ref, 'refs/tags/') }}
 
-      - uses: actions/create-github-app-token@v1
-        id: app-token
+      - uses: dreadbox/github-action@v1
         if: ${{ github.ref == format('refs/heads/{0}', inputs.default-branch) || startsWith(github.ref, 'refs/tags/') }}
         with:
           app-id: ${{ secrets.app-id }}
-          private-key: ${{ secrets.app-private-key }}
-          owner: dreadbox
-
-      - uses: DeterminateSystems/determinate-nix-action@v3
-        if: ${{ github.ref == format('refs/heads/{0}', inputs.default-branch) || startsWith(github.ref, 'refs/tags/') }}
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-
-      - uses: DeterminateSystems/flakehub-cache-action@main
-        if: ${{ github.ref == format('refs/heads/{0}', inputs.default-branch) || startsWith(github.ref, 'refs/tags/') }}
+          app-private-key: ${{ secrets.app-private-key }}
 
       - uses: DeterminateSystems/flakehub-push@main
         if: ${{ github.ref == format('refs/heads/{0}', inputs.default-branch) || startsWith(github.ref, 'refs/tags/') }}
