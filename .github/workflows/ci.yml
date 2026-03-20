@@ -1,0 +1,221 @@
+name: Dreadbox Nix CI
+
+on:
+  workflow_call:
+    inputs:
+      flakehub-name:
+        description: FlakeHub flake name, e.g. dreadbox/nix
+        required: true
+        type: string
+      default-branch:
+        description: >
+          The default Git branch for the repository.
+        required: false
+        default: ${{ github.event.repository.default_branch }}
+        type: string
+      fail-fast:
+        description: >
+          Whether to cancel all in-progress jobs if any matrix job fails.
+        required: false
+        default: true
+        type: boolean
+      runner-map:
+        description: >
+          A JSON mapping of Nix system types to GitHub Actions runner labels.
+        required: false
+        type: string
+        default: |
+          {
+            "aarch64-darwin": "macos-latest",
+            "x86_64-linux": "ubuntu-latest"
+          }
+      extra-nix-conf:
+        description: >
+          Extra Nix configuration lines passed to Determinate Nix.
+        required: false
+        type: string
+        default: ""
+      directory:
+        description: >
+          The root directory of your flake.
+        required: false
+        type: string
+        default: "."
+      flake-iter-flakeref:
+        description: >
+          Flake reference for the flake-iter tool. Useful for pinning to a
+          specific version.
+        required: false
+        type: string
+        default: https://flakehub.com/f/DeterminateSystems/flake-iter/*
+
+    outputs:
+      flake_name:
+        value: ${{ jobs.success.outputs.flake_name }}
+        description: The name of the published flake.
+      flake_version:
+        value: ${{ jobs.success.outputs.flake_version }}
+        description: The version of the published flake.
+      flakeref_exact:
+        value: ${{ jobs.success.outputs.flakeref_exact }}
+        description: >
+          A precise flake reference that always resolves to this exact release.
+      flakeref_at_least:
+        value: ${{ jobs.success.outputs.flakeref_at_least }}
+        description: >
+          A loose flake reference that resolves to at least this version.
+
+    secrets:
+      app-id:
+        description: GitHub App ID (pass secrets.APP_ID)
+        required: true
+      app-private-key:
+        description: GitHub App private key (pass secrets.APP_PRIVATE_KEY)
+        required: true
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+
+    outputs:
+      systems: ${{ steps.inventory.outputs.systems }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: dreadbox
+
+      - name: Configure git to use app token
+        shell: bash
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - uses: DeterminateSystems/flakehub-cache-action@main
+
+      - uses: DeterminateSystems/flake-checker-action@main
+
+      - name: Inventory the flake for targeted systems
+        id: inventory
+        env:
+          FLAKE_ITER_RUNNER_MAP: ${{ toJson(fromJson(inputs.runner-map)) }}
+          FLAKE_ITER_FLAKEREF: ${{ inputs.flake-iter-flakeref }}
+        working-directory: ${{ inputs.directory }}
+        run: |
+          nix run "$FLAKE_ITER_FLAKEREF" -- systems
+
+  build:
+    runs-on: ${{ matrix.systems.runner }}
+    needs: inventory
+    strategy:
+      fail-fast: ${{ inputs.fail-fast }}
+      matrix:
+        systems: ${{ fromJSON(needs.inventory.outputs.systems) }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: dreadbox
+
+      - name: Configure git to use app token
+        shell: bash
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          extra-conf: |
+            ${{ inputs.extra-nix-conf }}
+
+      - uses: DeterminateSystems/flakehub-cache-action@main
+
+      - name: Run flake check
+        working-directory: ${{ inputs.directory }}
+        shell: bash
+        run: nix flake check --show-trace
+
+      - name: Build for ${{ matrix.systems.nix-system }}
+        env:
+          FLAKE_ITER_NIX_SYSTEM: ${{ matrix.systems.nix-system }}
+          FLAKE_ITER_FLAKEREF: ${{ inputs.flake-iter-flakeref }}
+        working-directory: ${{ inputs.directory }}
+        shell: bash
+        run: nix run "$FLAKE_ITER_FLAKEREF" -- --verbose build
+
+  success:
+    runs-on: ubuntu-latest
+    needs: build
+    if: ${{ always() }}
+
+    outputs:
+      flake_name: ${{ steps.publish.outputs.flake_name }}
+      flake_version: ${{ steps.publish.outputs.flake_version }}
+      flakeref_exact: ${{ steps.publish.outputs.flakeref_exact }}
+      flakeref_at_least: ${{ steps.publish.outputs.flakeref_at_least }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Check build results
+        run: "true"
+
+      - name: Fail if any build failed
+        if: |
+          contains(needs.*.result, 'failure') ||
+          contains(needs.*.result, 'cancelled')
+        run: |
+          echo "A dependent in the build matrix failed."
+          exit 1
+
+      - uses: actions/checkout@v4
+        if: ${{ github.ref == format('refs/heads/{0}', inputs.default-branch) || startsWith(github.ref, 'refs/tags/') }}
+
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        if: ${{ github.ref == format('refs/heads/{0}', inputs.default-branch) || startsWith(github.ref, 'refs/tags/') }}
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: dreadbox
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+        if: ${{ github.ref == format('refs/heads/{0}', inputs.default-branch) || startsWith(github.ref, 'refs/tags/') }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - uses: DeterminateSystems/flakehub-cache-action@main
+        if: ${{ github.ref == format('refs/heads/{0}', inputs.default-branch) || startsWith(github.ref, 'refs/tags/') }}
+
+      - uses: DeterminateSystems/flakehub-push@main
+        if: ${{ github.ref == format('refs/heads/{0}', inputs.default-branch) || startsWith(github.ref, 'refs/tags/') }}
+        id: publish
+        with:
+          rolling: ${{ github.ref == format('refs/heads/{0}', inputs.default-branch) }}
+          visibility: private
+          name: ${{ inputs.flakehub-name }}
+          include-output-paths: true
+          directory: ${{ inputs.directory }}
